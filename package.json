@@ -1,0 +1,36 @@
+{
+  "name": "assignments-feedback",
+  "version": "1.0.0",
+  "description": "Study assignment management system with Discord bot and AI feedback",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "discord-bot",
+    "shared/*"
+  ],
+  "scripts": {
+    "dev": "npm-run-all --parallel dev:*",
+    "dev:backend": "npm run dev --workspace=backend",
+    "dev:bot": "npm run dev --workspace=discord-bot",
+    "build": "npm-run-all build:*",
+    "build:shared": "npm run build --workspace=shared/types && npm run build --workspace=shared/utils",
+    "build:backend": "npm run build --workspace=backend",
+    "build:bot": "npm run build --workspace=discord-bot",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "eslint . --ext .ts,.tsx",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md}\""
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@typescript-eslint/eslint-plugin": "^6.19.0",
+    "@typescript-eslint/parser": "^6.19.0",
+    "eslint": "^8.56.0",
+    "eslint-config-prettier": "^9.1.0",
+    "npm-run-all": "^4.1.5",
+    "prettier": "^3.2.4",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

@@ -1,0 +1,229 @@
+// Discord-optimized Prisma schema for assignment management system
+// Optimized for Korean language support and sub-100ms Discord API responses
+
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["fullTextSearch", "postgresqlExtensions"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  extensions = [pg_trgm]
+}
+
+model User {
+  id          String       @id @default(uuid())
+  discordId   String       @unique @db.VarChar(20) // Discord snowflake ID
+  username    String       @db.VarChar(100) // Korean username support
+  displayName String?      @db.VarChar(100) // Discord display name
+  locale      String?      @db.VarChar(10) @default("ko") // Language preference
+  timezone    String?      @db.VarChar(50) @default("Asia/Seoul")
+  isActive    Boolean      @default(true)
+  lastSeenAt  DateTime?    // For activity tracking
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  submissions Submission[]
+  userStats   UserStats?
+
+  @@index([discordId], name: "idx_user_discord_id")
+  @@index([username(ops: raw("gin_trgm_ops"))], type: Gin, name: "idx_user_username_search")
+  @@index([lastSeenAt], name: "idx_user_activity")
+  @@map("users")
+}
+
+model Assignment {
+  id               String       @id @default(uuid())
+  assignmentCode   String       @unique @db.VarChar(6) // 6-character alphanumeric code
+  title            String       @db.VarChar(200) // Korean title support
+  description      String       @db.Text // Markdown content
+  requirements     String       @db.Text // Structured requirements
+  recommendations  String       @db.Text // Best practices
+  deadline         DateTime
+  isActive         Boolean      @default(true)
+  difficulty       Difficulty   @default(MEDIUM)
+  category         String?      @db.VarChar(50) // frontend, backend, fullstack
+  estimatedHours   Int?         // Time estimate
+  maxSubmissions   Int?         @default(1) // Multiple submissions allowed
+  autoFeedback     Boolean      @default(true) // AI feedback enabled
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  createdBy        String?      @db.VarChar(20) // Creator Discord ID
+  submissions      Submission[]
+  assignmentStats  AssignmentStats?
+
+  @@index([assignmentCode], name: "idx_assignment_code")
+  @@index([deadline], name: "idx_assignment_deadline")
+  @@index([isActive, deadline], name: "idx_assignment_active_deadline")
+  @@index([category], name: "idx_assignment_category")
+  @@index([title(ops: raw("gin_trgm_ops"))], type: Gin, name: "idx_assignment_title_search")
+  @@map("assignments")
+}
+
+model Submission {
+  id              String         @id @default(uuid())
+  assignmentCode  String         @db.VarChar(6)
+  userId          String
+  submissionType  SubmissionType
+  content         String?        @db.Text // Extracted content for analysis
+  url             String?        @db.VarChar(500) // GitHub/blog URL
+  title           String?        @db.VarChar(200) // Korean title support
+  language        String?        @db.VarChar(20) // Programming language
+  status          SubmissionStatus @default(PENDING)
+  attemptNumber   Int           @default(1) // For multiple submissions
+  processingTime  Int?          // MS taken to process
+  errorMessage    String?       @db.Text // Processing errors
+  metadata        Json?         // Flexible data storage
+  submittedAt     DateTime      @default(now())
+  processedAt     DateTime?
+  lastModifiedAt  DateTime      @updatedAt
+  
+  assignment      Assignment    @relation(fields: [assignmentCode], references: [assignmentCode], onDelete: Cascade)
+  user            User          @relation(fields: [userId], references: [id])
+  feedback        Feedback?
+  submissionStats SubmissionStats?
+
+  @@unique([assignmentCode, userId, attemptNumber], name: "unique_submission_attempt")
+  @@index([assignmentCode], name: "idx_submission_assignment")
+  @@index([userId], name: "idx_submission_user")
+  @@index([submittedAt], name: "idx_submission_date")
+  @@index([status], name: "idx_submission_status")
+  @@index([assignmentCode, status], name: "idx_submission_assignment_status")
+  @@index([userId, submittedAt], name: "idx_submission_user_date")
+  @@map("submissions")
+}
+
+model Feedback {
+  id              String     @id @default(uuid())
+  submissionId    String     @unique
+  aiFeedback      String     @db.Text // Markdown feedback in Korean
+  aiScore         Json       // Detailed scoring breakdown
+  aiModel         String?    @db.VarChar(50) // Claude/GPT model used
+  aiTokensUsed    Int?       // Cost tracking
+  manualFeedback  String?    @db.Text // Teacher override
+  feedbackType    FeedbackType @default(AI)
+  isPublic        Boolean    @default(true) // Visible to student
+  language        String     @db.VarChar(10) @default("ko")
+  processingTime  Int?       // MS taken to generate
+  cacheKey        String?    @db.VarChar(100) // For Redis caching
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  createdBy       String?    @db.VarChar(20) // Creator Discord ID for manual feedback
+  
+  submission      Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  @@index([submissionId], name: "idx_feedback_submission")
+  @@index([feedbackType], name: "idx_feedback_type")
+  @@index([createdAt], name: "idx_feedback_created")
+  @@index([cacheKey], name: "idx_feedback_cache")
+  @@map("feedbacks")
+}
+
+// Statistics and analytics tables
+model UserStats {
+  id                  String   @id @default(uuid())
+  userId              String   @unique
+  totalSubmissions    Int      @default(0)
+  completedAssignments Int     @default(0)
+  averageScore        Float?   
+  totalTokensUsed     Int      @default(0)
+  lastSubmissionAt    DateTime?
+  bestCategory        String?  @db.VarChar(50)
+  streakDays          Int      @default(0)
+  updatedAt           DateTime @updatedAt
+  
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@map("user_stats")
+}
+
+model AssignmentStats {
+  id                  String   @id @default(uuid())
+  assignmentCode      String   @unique @db.VarChar(6)
+  totalSubmissions    Int      @default(0)
+  averageScore        Float?
+  averageProcessingTime Int?   // MS
+  completionRate      Float?   // Percentage
+  popularityScore     Float?   // Engagement metric
+  updatedAt           DateTime @updatedAt
+  
+  assignment          Assignment @relation(fields: [assignmentCode], references: [assignmentCode], onDelete: Cascade)
+  
+  @@map("assignment_stats")
+}
+
+model SubmissionStats {
+  id                  String   @id @default(uuid())
+  submissionId        String   @unique
+  codeComplexity      Int?     // Cyclomatic complexity
+  linesOfCode         Int?
+  filesAnalyzed       Int?
+  testCoverage        Float?   // If available
+  performanceScore    Float?   // If applicable
+  securityScore       Float?   // Security analysis
+  readabilityScore    Float?   // Code readability
+  updatedAt           DateTime @updatedAt
+  
+  submission          Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  
+  @@map("submission_stats")
+}
+
+// System performance and caching
+model SystemCache {
+  id          String   @id @default(uuid())
+  cacheKey    String   @unique @db.VarChar(200)
+  cacheValue  Json     // Flexible JSON storage
+  expiresAt   DateTime
+  hitCount    Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@index([cacheKey], name: "idx_cache_key")
+  @@index([expiresAt], name: "idx_cache_expiry")
+  @@map("system_cache")
+}
+
+model PerformanceLog {
+  id          String   @id @default(uuid())
+  operation   String   @db.VarChar(100) // Discord command or API endpoint
+  executionTime Int    // Milliseconds
+  success     Boolean  @default(true)
+  errorType   String?  @db.VarChar(100)
+  discordId   String?  @db.VarChar(20) // User who triggered
+  metadata    Json?    // Additional context
+  createdAt   DateTime @default(now())
+  
+  @@index([operation], name: "idx_perf_operation")
+  @@index([createdAt], name: "idx_perf_created")
+  @@index([success], name: "idx_perf_success")
+  @@map("performance_logs")
+}
+
+// Enums
+enum SubmissionType {
+  blog
+  code
+  mixed
+}
+
+enum SubmissionStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  RESUBMITTED
+}
+
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+  EXPERT
+}
+
+enum FeedbackType {
+  AI
+  MANUAL
+  HYBRID
+}

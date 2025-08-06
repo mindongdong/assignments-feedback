@@ -1,0 +1,14 @@
+{
+  "name": "@shared/utils",
+  "version": "1.0.0",
+  "description": "Shared utilities for assignments feedback system",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0"
+  }
+}
