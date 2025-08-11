@@ -185,7 +185,7 @@ export class ContentFetcher {
    */
   async cloneGitHubRepo(url: string, options: CloneOptions = {}): Promise<RepoContent> {
     try {
-      const { branch = 'main', specificFolder, maxFiles = 50, maxFileSize = 1024 * 1024 } = options;
+      const { branch = 'main', specificFolder, maxFiles = 20, maxFileSize = 1024 * 1024 } = options;
       
       const repoInfo = parseGitHubUrl(url);
       if (!repoInfo) {

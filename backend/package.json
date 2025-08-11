@@ -13,7 +13,12 @@
     "migrate": "prisma migrate dev",
     "migrate:prod": "prisma migrate deploy",
     "db:push": "prisma db push",
-    "db:seed": "tsx src/database/seed.ts"
+    "db:seed": "tsx src/database/seed.ts",
+    "test:github": "tsx src/scripts/test-github-service.ts",
+    "test:ai:claude": "tsx src/scripts/test-claude-feedback.ts",
+    "test:ai:evaluation": "tsx src/scripts/test-evaluation-criteria.ts",
+    "test:frontend": "tsx src/scripts/test-frontend-feedback.ts",
+    "test:backend": "tsx src/scripts/test-backend-feedback.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.17.0",

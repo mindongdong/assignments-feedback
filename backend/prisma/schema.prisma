@@ -39,10 +39,12 @@ model Assignment {
   description      String       @db.Text // Markdown content
   requirements     String       @db.Text // Structured requirements
   recommendations  String       @db.Text // Best practices
+  evaluationCriteria String?    @db.Text // Custom evaluation criteria for feedback
   deadline         DateTime
   isActive         Boolean      @default(true)
   difficulty       Difficulty   @default(MEDIUM)
-  category         String?      @db.VarChar(50) // frontend, backend, fullstack
+  category         String?      @db.VarChar(50) // programming, frontend, backend, algorithm, blog
+  position         String?      @db.VarChar(50) // Specific position: frontend_react, backend_fastapi
   estimatedHours   Int?         // Time estimate
   maxSubmissions   Int?         @default(1) // Multiple submissions allowed
   autoFeedback     Boolean      @default(true) // AI feedback enabled
@@ -56,6 +58,7 @@ model Assignment {
   @@index([deadline], name: "idx_assignment_deadline")
   @@index([isActive, deadline], name: "idx_assignment_active_deadline")
   @@index([category], name: "idx_assignment_category")
+  @@index([position], name: "idx_assignment_position")
   @@index([title(ops: raw("gin_trgm_ops"))], type: Gin, name: "idx_assignment_title_search")
   @@map("assignments")
 }

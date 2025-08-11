@@ -3,7 +3,7 @@ import OpenAI from 'openai';
 import { logger } from '../utils/logger';
 import { ExternalServiceError } from '../utils/errors';
 import { retryWithBackoff } from '../utils/helpers';
-import { CacheService } from './CacheService';
+// import { CacheService } from './CacheService'; // Redis cache removed - not functional
 import * as crypto from 'crypto';
 
 export interface FeedbackRequest {
@@ -12,7 +12,9 @@ export interface FeedbackRequest {
     title: string;
     requirements: string[];
     recommendations: string[];
-    category?: 'programming' | 'blog' | 'algorithm' | 'design' | 'analysis';
+    category?: 'programming' | 'frontend' | 'backend' | 'blog' | 'algorithm' | 'design' | 'analysis';
+    position?: 'frontend_react' | 'backend_fastapi' | string; // Specific technology position
+    evaluationCriteria?: string[] | { title: string; points: number; details: string[] }[]; // Custom evaluation criteria
     difficulty?: 'beginner' | 'intermediate' | 'advanced';
   };
   submission: {
@@ -62,6 +64,11 @@ export interface AIFeedbackResponse {
     model: string;
     tokens_used?: number;
   };
+  analyzed_files?: {
+    file_tree: string;
+    file_count: number;
+    total_size: number;
+  };
   // Legacy fields for backward compatibility
   next_steps?: string[];
   model_used?: string;
@@ -110,7 +117,7 @@ export class AIService {
   private anthropic?: Anthropic;
   private openai?: OpenAI;
   private provider: 'anthropic' | 'openai';
-  private cacheService?: CacheService;
+  // private cacheService?: CacheService; // Cache system removed
   private modelConfig: {
     claudeModel: string;
     openaiModel: string;
@@ -126,17 +133,17 @@ export class AIService {
     totalRequests: number;
   };
 
-  constructor(cacheService?: CacheService) {
+  constructor() {
     // Provider preference from environment
     const preference = (process.env.AI_MODEL_PREFERENCE || 'claude').toLowerCase();
     this.provider = preference === 'openai' ? 'openai' : 'anthropic';
-    this.cacheService = cacheService;
+    // this.cacheService = cacheService; // Cache system removed
     
     // Enhanced model configuration from environment variables
     this.modelConfig = {
       claudeModel: process.env.AI_CLAUDE_MODEL || 'claude-3-5-sonnet-20241022',
       openaiModel: process.env.AI_OPENAI_MODEL || 'gpt-4o',
-      maxTokens: parseInt(process.env.AI_MAX_TOKENS || '4000'),
+      maxTokens: parseInt(process.env.AI_MAX_TOKENS || '8000'), // Increased default from 4000 to 8000
       temperature: parseFloat(process.env.AI_TEMPERATURE || '0.2'),
       cacheTTL: parseInt(process.env.AI_CACHE_TTL || '1800'), // 30 minutes
       performanceTarget: parseInt(process.env.AI_PERFORMANCE_TARGET_MS || '100'),
@@ -197,27 +204,8 @@ export class AIService {
       // Generate cache key from request content
       const cacheKey = this.generateCacheKey(request);
       
-      // Try cache first for performance optimization
-      if (this.cacheService && request.performance_hint?.use_cached_patterns !== false) {
-        const cached = await this.cacheService.get<AIFeedbackResponse>(
-          cacheKey, 
-          'ai_feedback'
-        );
-        
-        if (cached) {
-          this.updatePerformanceMetrics(Date.now() - startTime, true);
-          logger.info('Cache hit for AI feedback request', { cacheKey });
-          
-          // Update cache info and legacy fields
-          const responseTime = Date.now() - startTime;
-          cached.cache_info.cache_hit = true;
-          cached.cache_info.response_time_ms = responseTime;
-          cached.cache_hit = true; // Legacy field
-          cached.generation_time_ms = responseTime; // Legacy field
-          
-          return cached;
-        }
-      }
+      // Cache system removed - Redis not functional
+      logger.info('Generating new AI feedback request', { cacheKey });
       
       // Generate new feedback
       let response: AIFeedbackResponse;
@@ -237,15 +225,8 @@ export class AIService {
       response.generation_time_ms = response.cache_info.response_time_ms; // Legacy field
       response.next_steps = response.improvement_suggestions; // Legacy field
       
-      // Cache the response
-      if (this.cacheService) {
-        await this.cacheService.set(
-          cacheKey,
-          response,
-          this.modelConfig.cacheTTL,
-          'ai_feedback'
-        );
-      }
+      // Cache system removed - Redis not functional
+      logger.info('AI feedback generated successfully', { responseTime: Date.now() - startTime });
       
       this.updatePerformanceMetrics(Date.now() - startTime, false);
       
@@ -298,7 +279,7 @@ export class AIService {
       throw new Error('Anthropic client not initialized');
     }
 
-    const template = this.getPromptTemplate(request.assignment.category || 'programming');
+    const template = this.getPromptTemplate(request.assignment.category || 'programming', request.assignment.position);
     const prompt = this.buildEnhancedFeedbackPrompt(request, template);
 
     return retryWithBackoff(async () => {
@@ -362,7 +343,7 @@ export class AIService {
       throw new Error('OpenAI client not initialized');
     }
 
-    const template = this.getPromptTemplate(request.assignment.category || 'programming');
+    const template = this.getPromptTemplate(request.assignment.category || 'programming', request.assignment.position);
     const prompt = this.buildEnhancedFeedbackPrompt(request, template);
 
     return retryWithBackoff(async () => {
@@ -721,7 +702,54 @@ ${content}
   private initializePromptTemplates(): void {
     this.promptTemplates = new Map();
 
-    // Programming assignments template
+    // Frontend (React.js) assignments template
+    this.promptTemplates.set('frontend', {
+      system: `당신은 한국의 React.js 프론트엔드 개발 교육 전문가입니다.
+      학습자에게 React.js와 모던 프론트엔드 개발에 대한 구체적이고 실용적인 코드 리뷰를 제공합니다.
+      
+      전문 분야:
+      - React.js 컴포넌트 설계 및 구조
+      - React Hooks (useState, useEffect, useRef, useCallback, useMemo 등)
+      - 상태 관리 패턴 및 최적화
+      - JSX 문법과 컴포넌트 스타일링
+      - 프론트엔드 성능 최적화
+      - 사용자 경험(UX) 개선
+      
+      피드백 작성 원칙:
+      1. 평가 기준별로 구체적인 코드 부분을 인용하여 평가
+      2. 각 평가 항목마다 "[평가한 코드 특정 부분]이 [평가 이유]로 해당 항목에 [부합했다/부합하지 않았다] 그래서 [점수]점이다" 형식 사용
+      3. React.js 베스트 프랙티스 기준으로 평가
+      4. 실제 코드 라인 번호나 컴포넌트명을 명시
+      5. 개선 코드 예시 제공`,
+      feedback: '',
+      validation: ''
+    });
+
+    // Backend (FastAPI) assignments template
+    this.promptTemplates.set('backend', {
+      system: `당신은 한국의 FastAPI 백엔드 개발 교육 전문가입니다.
+      학습자에게 FastAPI와 Python 백엔드 개발에 대한 구체적이고 실용적인 코드 리뷰를 제공합니다.
+      
+      전문 분야:
+      - FastAPI 라우팅 및 엔드포인트 설계
+      - Pydantic 모델과 데이터 검증
+      - 비동기 프로그래밍 (async/await)
+      - 데이터베이스 연동 (SQLAlchemy, MongoDB)
+      - API 보안 및 인증/인가
+      - RESTful API 설계 원칙
+      - 에러 핸들링과 로깅
+      
+      피드백 작성 원칙:
+      1. 평가 기준별로 구체적인 코드 부분을 인용하여 평가
+      2. 각 평가 항목마다 "[평가한 코드 특정 부분]이 [평가 이유]로 해당 항목에 [부합했다/부합하지 않았다] 그래서 [점수]점이다" 형식 사용
+      3. FastAPI와 Python 베스트 프랙티스 기준으로 평가
+      4. 실제 코드 라인 번호나 함수명을 명시
+      5. 개선 코드 예시 제공`,
+      feedback: '',
+      validation: ''
+    });
+
+    // Generic programming assignments template (fallback)
     this.promptTemplates.set('programming', {
       system: `당신은 한국의 프로그래밍 교육 전문가입니다. 
       학습자에게 건설적이고 구체적인 코드 리뷰를 제공하며, 
@@ -771,9 +799,28 @@ ${content}
   }
 
   /**
-   * Get prompt template based on assignment category
+   * Get prompt template based on assignment category and position
    */
-  private getPromptTemplate(category: string): PromptTemplate {
+  private getPromptTemplate(category: string, position?: string): PromptTemplate {
+    // Check position first for more specific templates
+    if (position) {
+      if (position === 'frontend_react' || position.includes('react')) {
+        return this.promptTemplates.get('frontend')!;
+      }
+      if (position === 'backend_fastapi' || position.includes('fastapi')) {
+        return this.promptTemplates.get('backend')!;
+      }
+    }
+    
+    // Check category for template selection
+    if (category === 'frontend') {
+      return this.promptTemplates.get('frontend')!;
+    }
+    if (category === 'backend') {
+      return this.promptTemplates.get('backend')!;
+    }
+    
+    // Default to generic programming template
     return this.promptTemplates.get(category) || this.promptTemplates.get('programming')!;
   }
 
@@ -794,11 +841,15 @@ ${content}
 ### 과제 정보
 - **과제명**: ${assignment.title}
 - **과제 코드**: ${assignment.code}
-- **분야**: ${assignment.category || 'programming'}
+- **분야**: ${this.translateCategory(assignment.category || 'programming')}
+${assignment.position ? `- **기술 스택**: ${this.translatePosition(assignment.position)}` : ''}
 - **난이도**: ${assignment.difficulty || 'intermediate'}
 
-### 요구사항
+### 요구사항 (피드백 시 참고용)
 ${assignment.requirements.map((req, idx) => `${idx + 1}. ${req}`).join('\n')}
+
+### 평가 기준 (이 형식대로 피드백 작성 필수)
+${this.generateEvaluationCriteria(assignment)}
 
 ### 권장사항
 ${assignment.recommendations.map((rec, idx) => `${idx + 1}. ${rec}`).join('\n')}
@@ -822,34 +873,34 @@ ${user_context ? `
 ` : ''}
 
 ### 피드백 요청사항
-다음 JSON 형식으로 **한국어**로 상세하고 건설적인 피드백을 작성해주세요:
+**한국어 마크다운 형식**으로 다음 구조로 상세하고 건설적인 피드백을 작성해주세요:
 
-\`\`\`json
-{
-  "feedback": "마크다운 형식의 상세한 한국어 피드백",
-  "overall_score": 0-100점,
-  "criteria_scores": {
-    "requirements_met": 0-100,
-    "code_quality": 0-100,
-    "best_practices": 0-100,
-    "creativity": 0-100
-  },
-  "feedback_quality": {
-    "confidence_score": 0-100,
-    "cultural_appropriateness": 0-100,
-    "actionability": 0-100
-  },
-  "improvement_suggestions": ["구체적인 개선 제안들"],
-  "next_steps": ["다음 학습 단계 제안들"]
-}
+**예시 형식:**
+\`\`\`markdown
+# 피드백 제목
+
+## 평가 기준별 상세 피드백
+
+### 1. 평가 항목명 (XX점)
+[... 구체적인 평가 내용 ...]
+
+## 최종 평가
+평가 기준별 상세 피드백 내용을 종합하여 다음 항목들을 포함한 상세한 종합 평가를 작성해주세요:
+- 전체적인 구현 수준과 완성도 평가
+- 각 평가 기준에서 나타난 강점과 약점 요약
+- 코드 품질과 구조적 우수성에 대한 종합적 판단
+- 개발자의 기술적 역량 수준 평가
+- 향후 학습 방향에 대한 구체적 조언
+- 실무 적용 가능성과 개선 우선순위
 \`\`\`
 
 ### 피드백 작성 가이드라인
-1. **긍정적 시작**: 잘한 점을 먼저 언급하여 학습 동기 부여
-2. **구체적 지적**: 개선할 점은 구체적인 예시와 함께 설명
-3. **실용적 조언**: 실제 개발현장에서 활용 가능한 팁 제공
-4. **학습 방향**: 다음 단계 학습 방향과 추천 자료 제시
-5. **격려 마무리**: 학습자를 격려하는 따뜻한 메시지로 마무리
+1. **마크다운 형식 사용**: JSON이 아닌 마크다운 형식으로 깔끔하게 작성
+2. **평가 기준별 구체적 평가**: 각 평가 기준에 대해 "[코드의 특정 부분]이 [구체적인 이유]로 해당 항목에 [부합했다/부합하지 않았다] 그래서 [점수]점이다" 형식 사용
+3. **코드 인용**: 실제 제출된 코드의 특정 부분(함수명, 컴포넌트명, 라인 등)을 구체적으로 언급
+4. **개선 방안 제시**: 부족한 부분에 대한 구체적인 개선 코드 예시 제공
+5. **최종 평가 작성**: 마지막에 '## 최종 평가' 섹션을 추가하여 평가 기준별 피드백을 종합한 상세한 종합 평가를 작성
+6. **추천 학습 자료 금지**: 학습 자료 추천이나 참고 링크는 절대 포함하지 말 것
 
 한국의 개발 학습 문화와 ${culturalContext === 'korean_academic' ? '학술적 환경' : '국제적 환경'}에 맞는 톤과 내용으로 작성해주세요.
 `;
@@ -860,34 +911,34 @@ ${user_context ? `
    */
   private parseClaudeStructuredResponse(response: string, request: FeedbackRequest): AIFeedbackResponse {
     try {
-      // Extract JSON from Claude's response
-      const jsonMatch = response.match(/```json\s*([\s\S]*?)\s*```/);
-      let jsonContent = jsonMatch ? jsonMatch[1] : response;
+      // Since we're now requesting markdown format, use the response directly as content
+      // Try to extract scores if they're mentioned in the response, otherwise use defaults
+      const scoreMatch = response.match(/총점[:\s]*([0-9]+)(?:[\/점])/i) || 
+                        response.match(/전체[:\s]*([0-9]+)(?:[\/점])/i);
+      const overallScore = scoreMatch ? parseInt(scoreMatch[1]) : 75;
       
-      // Fallback: try to find any JSON object
-      if (!jsonMatch) {
-        const fallbackMatch = response.match(/\{[\s\S]*\}/);
-        jsonContent = fallbackMatch ? fallbackMatch[0] : response;
-      }
-
-      const parsed = JSON.parse(jsonContent);
+      // Extract individual criteria scores if mentioned
+      const requirementsMatch = response.match(/요구사항[^0-9]*([0-9]+)(?:[\/점])/i);
+      const qualityMatch = response.match(/품질[^0-9]*([0-9]+)(?:[\/점])/i);
+      const practicesMatch = response.match(/모범[^0-9]*([0-9]+)(?:[\/점])/i);
+      const creativityMatch = response.match(/창의[^0-9]*([0-9]+)(?:[\/점])/i);
       
       return {
-        content: parsed.feedback || response,
-        score: parsed.overall_score || 75,
+        content: response, // Use the entire markdown response as content
+        score: overallScore,
         criteria_scores: {
-          requirements_met: parsed.criteria_scores?.requirements_met || 75,
-          code_quality: parsed.criteria_scores?.code_quality || 75,
-          best_practices: parsed.criteria_scores?.best_practices || 75,
-          creativity: parsed.criteria_scores?.creativity || 75,
+          requirements_met: requirementsMatch ? parseInt(requirementsMatch[1]) : Math.round(overallScore * 0.9),
+          code_quality: qualityMatch ? parseInt(qualityMatch[1]) : Math.round(overallScore * 0.85),
+          best_practices: practicesMatch ? parseInt(practicesMatch[1]) : Math.round(overallScore * 0.8),
+          creativity: creativityMatch ? parseInt(creativityMatch[1]) : Math.round(overallScore * 0.7),
         },
         feedback_quality: {
-          confidence_score: parsed.feedback_quality?.confidence_score || 85,
-          cultural_appropriateness: parsed.feedback_quality?.cultural_appropriateness || 90,
-          actionability: parsed.feedback_quality?.actionability || 80,
+          confidence_score: 85,
+          cultural_appropriateness: 90,
+          actionability: 80,
         },
-        improvement_suggestions: parsed.improvement_suggestions || ['추가 학습을 권장합니다.'],
-        learning_resources: this.generateLearningResources(request.assignment.category),
+        improvement_suggestions: this.extractImprovementSuggestions(response),
+        learning_resources: [], // Remove learning resources as requested
         cache_info: {
           cache_key: this.generateCacheKey(request),
           cache_hit: false,
@@ -899,6 +950,7 @@ ${user_context ? `
           model: this.modelConfig.claudeModel,
           tokens_used: response.length,
         },
+        analyzed_files: this.extractAnalyzedFiles(request),
       };
     } catch (error) {
       logger.error('Failed to parse Claude structured response:', error);
@@ -911,36 +963,83 @@ ${user_context ? `
    */
   private parseOpenAIStructuredResponse(response: string, request: FeedbackRequest): AIFeedbackResponse {
     try {
-      const parsed = JSON.parse(response);
+      // First try to parse as JSON (OpenAI might still return JSON format)
+      let parsedContent: any = null;
+      let isJsonResponse = false;
       
-      return {
-        content: parsed.feedback || response,
-        score: parsed.overall_score || 75,
-        criteria_scores: {
-          requirements_met: parsed.criteria_scores?.requirements_met || 75,
-          code_quality: parsed.criteria_scores?.code_quality || 75,
-          best_practices: parsed.criteria_scores?.best_practices || 75,
-          creativity: parsed.criteria_scores?.creativity || 75,
-        },
-        feedback_quality: {
-          confidence_score: parsed.feedback_quality?.confidence_score || 85,
-          cultural_appropriateness: parsed.feedback_quality?.cultural_appropriateness || 90,
-          actionability: parsed.feedback_quality?.actionability || 80,
-        },
-        improvement_suggestions: parsed.improvement_suggestions || ['추가 학습을 권장합니다.'],
-        learning_resources: this.generateLearningResources(request.assignment.category),
-        cache_info: {
-          cache_key: this.generateCacheKey(request),
-          cache_hit: false,
-          response_time_ms: 0,
-        },
-        generated_at: new Date().toISOString(),
-        model_info: {
-          provider: 'openai',
-          model: this.modelConfig.openaiModel,
-          tokens_used: response.length,
-        },
-      };
+      try {
+        parsedContent = JSON.parse(response);
+        isJsonResponse = true;
+      } catch {
+        // If not JSON, treat as markdown like Claude
+      }
+      
+      if (isJsonResponse && parsedContent) {
+        return {
+          content: parsedContent.feedback || response,
+          score: parsedContent.overall_score || 75,
+          criteria_scores: {
+            requirements_met: parsedContent.criteria_scores?.requirements_met || 75,
+            code_quality: parsedContent.criteria_scores?.code_quality || 75,
+            best_practices: parsedContent.criteria_scores?.best_practices || 75,
+            creativity: parsedContent.criteria_scores?.creativity || 75,
+          },
+          feedback_quality: {
+            confidence_score: parsedContent.feedback_quality?.confidence_score || 85,
+            cultural_appropriateness: parsedContent.feedback_quality?.cultural_appropriateness || 90,
+            actionability: parsedContent.feedback_quality?.actionability || 80,
+          },
+          improvement_suggestions: parsedContent.improvement_suggestions || this.extractImprovementSuggestions(response),
+          learning_resources: [], // Remove learning resources as requested
+          cache_info: {
+            cache_key: this.generateCacheKey(request),
+            cache_hit: false,
+            response_time_ms: 0,
+          },
+          generated_at: new Date().toISOString(),
+          model_info: {
+            provider: 'openai',
+            model: this.modelConfig.openaiModel,
+            tokens_used: response.length,
+          },
+          analyzed_files: this.extractAnalyzedFiles(request),
+        };
+      } else {
+        // Handle as markdown response
+        const scoreMatch = response.match(/총점[:\s]*([0-9]+)(?:[\/점])/i) || 
+                          response.match(/전체[:\s]*([0-9]+)(?:[\/점])/i);
+        const overallScore = scoreMatch ? parseInt(scoreMatch[1]) : 75;
+        
+        return {
+          content: response,
+          score: overallScore,
+          criteria_scores: {
+            requirements_met: Math.round(overallScore * 0.9),
+            code_quality: Math.round(overallScore * 0.85),
+            best_practices: Math.round(overallScore * 0.8),
+            creativity: Math.round(overallScore * 0.7),
+          },
+          feedback_quality: {
+            confidence_score: 85,
+            cultural_appropriateness: 90,
+            actionability: 80,
+          },
+          improvement_suggestions: this.extractImprovementSuggestions(response),
+          learning_resources: [], // Remove learning resources as requested
+          cache_info: {
+            cache_key: this.generateCacheKey(request),
+            cache_hit: false,
+            response_time_ms: 0,
+          },
+          generated_at: new Date().toISOString(),
+          model_info: {
+            provider: 'openai',
+            model: this.modelConfig.openaiModel,
+            tokens_used: response.length,
+          },
+          analyzed_files: this.extractAnalyzedFiles(request),
+        };
+      }
     } catch (error) {
       logger.error('Failed to parse OpenAI structured response:', error);
       return this.createFallbackResponse(response, request);
@@ -1052,7 +1151,7 @@ ${user_context ? `
         actionability: 60,
       },
       improvement_suggestions: ['피드백 파싱에 실패했습니다. 다시 시도해주세요.'],
-      learning_resources: this.generateLearningResources(request.assignment.category),
+      learning_resources: [], // Remove learning resources as requested
       cache_info: {
         cache_key: this.generateCacheKey(request),
         cache_hit: false,
@@ -1064,7 +1163,51 @@ ${user_context ? `
         model: this.provider === 'anthropic' ? this.modelConfig.claudeModel : this.modelConfig.openaiModel,
         tokens_used: response.length,
       },
+      analyzed_files: this.extractAnalyzedFiles(request),
     };
+  }
+
+  /**
+   * Extract improvement suggestions from markdown response
+   */
+  private extractImprovementSuggestions(response: string): string[] {
+    const suggestions: string[] = [];
+    
+    // Look for improvement sections in markdown
+    const improvementSections = [
+      /## 개선.*?(?=##|$)/gis,
+      /### 개선.*?(?=###|##|$)/gis,
+      /개선.*?점.*?[:：]([^\n]+)/gi
+    ];
+    
+    for (const regex of improvementSections) {
+      const matches = response.match(regex);
+      if (matches) {
+        for (const match of matches) {
+          // Extract bullet points or numbered lists from improvement sections
+          const points = match.match(/[-*]\s+(.+?)(?=\n|$)/g) || 
+                        match.match(/\d+\.\s+(.+?)(?=\n|$)/g);
+          if (points) {
+            points.forEach(point => {
+              const cleaned = point.replace(/^[-*]\s+|^\d+\.\s+/, '').trim();
+              if (cleaned && !suggestions.includes(cleaned)) {
+                suggestions.push(cleaned);
+              }
+            });
+          }
+        }
+      }
+    }
+    
+    // Fallback: look for any mentions of improvements
+    if (suggestions.length === 0) {
+      const improvementMentions = response.match(/(?:개선|향상|보완).*?[.。]/g);
+      if (improvementMentions) {
+        suggestions.push(...improvementMentions.slice(0, 3)); // Take first 3
+      }
+    }
+    
+    return suggestions.length > 0 ? suggestions : ['지속적인 학습과 실습을 통한 개발 역량 향상을 권장합니다.'];
   }
 
   /**
@@ -1079,5 +1222,180 @@ ${user_context ? `
       },
       model_config: this.getModelInfo(),
     };
+  }
+
+  /**
+   * Translate category to Korean
+   */
+  private translateCategory(category: string): string {
+    const translations: { [key: string]: string } = {
+      'frontend': '프론트엔드',
+      'backend': '백엔드',
+      'programming': '프로그래밍',
+      'algorithm': '알고리즘',
+      'blog': '기술 블로그',
+      'design': '설계',
+      'analysis': '분석',
+    };
+    return translations[category] || category;
+  }
+
+  /**
+   * Translate position to Korean
+   */
+  private translatePosition(position: string): string {
+    const translations: { [key: string]: string } = {
+      'frontend_react': 'React.js',
+      'backend_fastapi': 'FastAPI',
+      'frontend_vue': 'Vue.js',
+      'frontend_angular': 'Angular',
+      'backend_express': 'Express.js',
+      'backend_django': 'Django',
+      'backend_spring': 'Spring Boot',
+      'fullstack': '풀스택',
+    };
+    return translations[position] || position;
+  }
+
+  /**
+   * Generate evaluation criteria based on assignment type
+   */
+  private generateEvaluationCriteria(assignment: any): string {
+    // If custom evaluation criteria are provided, format them appropriately
+    if (assignment.evaluationCriteria) {
+      // Check if it's an array of structured criteria objects
+      if (Array.isArray(assignment.evaluationCriteria) && assignment.evaluationCriteria.length > 0) {
+        // Check if first element is an object with title and points
+        if (typeof assignment.evaluationCriteria[0] === 'object' && 'title' in assignment.evaluationCriteria[0]) {
+          return assignment.evaluationCriteria.map((criterion: any, idx: number) => {
+            const header = `${idx + 1}. **${criterion.title}** (${criterion.points}점)`;
+            const details = criterion.details ? '\n' + criterion.details.map((d: string) => `   - ${d}`).join('\n') : '';
+            return header + details;
+          }).join('\n\n');
+        }
+        // If it's a simple string array
+        else if (typeof assignment.evaluationCriteria[0] === 'string') {
+          return assignment.evaluationCriteria.map((criterion: string, idx: number) => 
+            `${idx + 1}. ${criterion}`
+          ).join('\n');
+        }
+      }
+    }
+
+    const category = assignment.category || 'programming';
+    const position = assignment.position;
+    
+    // Default evaluation criteria
+    let criteria = [
+      '1. **요구사항 충족도 (40점)**: 과제에서 요구한 기능들이 모두 구현되었는가?',
+      '2. **코드 품질 (30점)**: 코드가 깔끔하고 읽기 쉬우며 유지보수가 용이한가?',
+      '3. **모범 사례 적용 (20점)**: 해당 기술의 베스트 프랙티스를 따르고 있는가?',
+      '4. **창의성 및 추가 구현 (10점)**: 요구사항 이상의 창의적인 기능이나 개선이 있는가?'
+    ];
+
+    // Customize criteria based on position first, then category
+    if (position === 'frontend_react' || category === 'frontend') {
+      criteria = [
+        '1. **컴포넌트 구조 및 설계 (30점)**: React 컴포넌트가 적절히 분리되고 재사용 가능하게 설계되었는가?',
+        '2. **React Hooks 활용 (25점)**: useState, useEffect 등 React Hooks를 올바르고 효율적으로 사용했는가?',
+        '3. **상태 관리 (20점)**: 컴포넌트 간 상태 전달과 관리가 효율적으로 구현되었는가?',
+        '4. **UI/UX 및 스타일링 (15점)**: 사용자 인터페이스가 직관적이고 반응형으로 구현되었는가?',
+        '5. **코드 품질 및 최적화 (10점)**: 코드가 깔끔하고 성능 최적화가 고려되었는가?'
+      ];
+    } else if (position === 'backend_fastapi' || category === 'backend') {
+      criteria = [
+        '1. **API 설계 및 라우팅 (30점)**: RESTful API 원칙에 따라 엔드포인트가 잘 설계되었는가?',
+        '2. **데이터 검증 및 모델링 (25점)**: Pydantic 모델을 활용한 데이터 검증이 적절한가?',
+        '3. **비동기 처리 (20점)**: async/await를 올바르게 사용하여 비동기 작업을 처리했는가?',
+        '4. **에러 처리 및 보안 (15점)**: 적절한 에러 처리와 기본적인 보안 조치가 구현되었는가?',
+        '5. **코드 구조 및 문서화 (10점)**: 코드가 체계적으로 구성되고 API 문서가 자동 생성되는가?'
+      ];
+    }
+
+    return criteria.join('\n');
+  }
+
+  /**
+   * Extract analyzed files information for metadata
+   */
+  private extractAnalyzedFiles(request: FeedbackRequest) {
+    const content = request.submission.content;
+    const files: string[] = [];
+    let totalSize = 0;
+    
+    // Extract file paths from markdown content
+    const fileHeaders = content.match(/^## (.+\.(js|jsx|ts|tsx|py|java|cpp|c|go|rb|php|kt|swift|rs|scala).*?)$/gm);
+    if (fileHeaders) {
+      fileHeaders.forEach(header => {
+        const filePath = header.replace(/^## /, '');
+        files.push(filePath);
+      });
+    }
+    
+    // Also look for code blocks with file info
+    const codeBlocks = content.match(/```[\w]*\n[\s\S]*?\n```/g);
+    if (codeBlocks) {
+      totalSize = codeBlocks.reduce((total, block) => total + block.length, 0);
+    }
+    
+    // Generate file tree structure
+    const fileTree = this.generateFileTree(files, content);
+    
+    return {
+      file_tree: fileTree,
+      file_count: files.length,
+      total_size: totalSize
+    };
+  }
+
+  /**
+   * Generate a visual file tree from file paths
+   */
+  private generateFileTree(files: string[], content: string): string {
+    if (files.length === 0) {
+      // Extract from project structure if available
+      const structureMatch = content.match(/```\n([\s\S]*?)\n```/);
+      if (structureMatch && structureMatch[1].includes('├──') || structureMatch[1].includes('└──')) {
+        return structureMatch[1];
+      }
+      return 'No specific file structure detected';
+    }
+
+    // Create a simple tree structure
+    const tree = ['📁 분석된 파일 구조:'];
+    const directories = new Set<string>();
+    
+    // Group files by directory
+    files.forEach(file => {
+      const parts = file.split('/');
+      if (parts.length > 1) {
+        for (let i = 0; i < parts.length - 1; i++) {
+          directories.add(parts.slice(0, i + 1).join('/'));
+        }
+      }
+    });
+    
+    // Sort directories and files
+    const sortedDirs = Array.from(directories).sort();
+    const sortedFiles = files.sort();
+    
+    // Build tree structure
+    if (sortedDirs.length > 0) {
+      sortedFiles.forEach((file, index) => {
+        const isLast = index === sortedFiles.length - 1;
+        const prefix = isLast ? '└── ' : '├── ';
+        const fileName = file.split('/').pop() || file;
+        tree.push(prefix + fileName);
+      });
+    } else {
+      // Simple flat structure
+      sortedFiles.forEach((file, index) => {
+        const isLast = index === sortedFiles.length - 1;
+        const prefix = isLast ? '└── ' : '├── ';
+        tree.push(prefix + file);
+      });
+    }
+    
+    return tree.join('\n');
   }
 }
